@@ -28,3 +28,6 @@ allprojects {
 task clean(type: Delete) {
     delete rootProject.buildDir
 }
+
+// English Ear MVP specialization (EN -> PT, one phone, offline fallback).
+apply from: 'english-ear.gradle'

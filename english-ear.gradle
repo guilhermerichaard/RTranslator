@@ -1,0 +1,57 @@
+// English Ear MVP build-time specialization.
+// Keeps the upstream Java source easy to sync while producing a one-way EN -> PT build.
+
+def serviceFile = file("${rootDir}/app/src/main/java/nie/translator/rtranslator/voice_translation/_walkie_talkie_mode/_walkie_talkie/WalkieTalkieService.java")
+
+tasks.register('patchEnglishEarSource') {
+    doLast {
+        if (!serviceFile.exists()) {
+            throw new GradleException("WalkieTalkieService.java not found")
+        }
+
+        String text = serviceFile.getText('UTF-8')
+        String original = text
+
+        // Force the MVP language pair. The UI will receive these values back from the service.
+        text = text.replace(
+                '        firstLanguage = (CustomLocale) intent.getSerializableExtra("firstLanguage");\n        secondLanguage = (CustomLocale) intent.getSerializableExtra("secondLanguage");',
+                '        // ENGLISH_EAR_FIXED_LANGUAGES\n        firstLanguage = new CustomLocale("en");\n        secondLanguage = new CustomLocale("pt");'
+        )
+
+        // In automatic mode do only one Whisper pass: English. This removes the second-language ASR pass.
+        text = text.replace(
+                'speechRecognizer.recognize(data, SPEECH_BEAM_SIZE, firstLanguage.getCode(), secondLanguage.getCode());',
+                'speechRecognizer.recognize(data, SPEECH_BEAM_SIZE, firstLanguage.getCode());'
+        )
+
+        // A single-language recognition result must always become EN -> PT in automatic/auto-language mode.
+        text = text.replace(
+                '                if(manualRecognizingFirstLanguage){\n                    translate(text, firstLanguage, secondLanguage, TRANSLATOR_BEAM_SIZE, false, firstResultTranslateListener);\n                } else if (manualRecognizingSecondLanguage) {\n                    translate(text, secondLanguage, firstLanguage, TRANSLATOR_BEAM_SIZE, false, secondResultTranslateListener);\n                }\n                manualRecognizingFirstLanguage = false;\n                manualRecognizingSecondLanguage = false;',
+                '                if(manualRecognizingFirstLanguage || manualRecognizingAutoLanguage || isMicAutomatic){\n                    translate(text, firstLanguage, secondLanguage, TRANSLATOR_BEAM_SIZE, false, firstResultTranslateListener);\n                } else if (manualRecognizingSecondLanguage) {\n                    translate(text, secondLanguage, firstLanguage, TRANSLATOR_BEAM_SIZE, false, secondResultTranslateListener);\n                }\n                manualRecognizingFirstLanguage = false;\n                manualRecognizingSecondLanguage = false;\n                manualRecognizingAutoLanguage = false;'
+        )
+
+        // If automatic English recognition fails, resume the recorder instead of leaving the mic idle.
+        text = text.replace(
+                '                manualRecognizingFirstLanguage = false;\n                manualRecognizingSecondLanguage = false;\n                notifyMicActivated();',
+                '                manualRecognizingFirstLanguage = false;\n                manualRecognizingSecondLanguage = false;\n                manualRecognizingAutoLanguage = false;\n                if (isMicAutomatic) {\n                    startVoiceRecorder();\n                }\n                notifyMicActivated();'
+        )
+
+        // Fail loudly if upstream changes make the patch no longer applicable.
+        if (!text.contains('ENGLISH_EAR_FIXED_LANGUAGES')) {
+            throw new GradleException('English Ear language patch was not applied; upstream source changed')
+        }
+
+        if (text != original) {
+            serviceFile.write(text, 'UTF-8')
+            println 'English Ear: applied EN -> PT low-latency specialization'
+        } else {
+            println 'English Ear: source already specialized'
+        }
+    }
+}
+
+gradle.projectsEvaluated {
+    project(':app').tasks.named('preBuild').configure {
+        dependsOn rootProject.tasks.named('patchEnglishEarSource')
+    }
+}
